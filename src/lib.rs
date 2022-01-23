@@ -28,7 +28,7 @@ impl<T> RCell<T> {
             ArcState::Arc(arc) => Some(arc.clone()),
             ArcState::Weak(weak) => {
                 if let Some(arc) = weak.upgrade() {
-                    mem::replace(&mut *lock, ArcState::Arc(arc.clone()));
+                    let _ = mem::replace(&mut *lock, ArcState::Arc(arc.clone()));
                     Some(arc)
                 } else {
                     None
@@ -40,18 +40,18 @@ impl<T> RCell<T> {
     pub fn release(&self) {
         let mut lock = self.0.lock();
         let new = if let ArcState::Arc(arc) = &*lock {
-            Some(ArcState::Weak(Arc::downgrade(&arc)))
+            Some(ArcState::Weak(Arc::downgrade(arc)))
         } else {
             None
         };
 
         if let Some(new) = new {
-            mem::replace(&mut *lock, new);
+            let _ = mem::replace(&mut *lock, new);
         }
     }
 
     pub fn remove(&self) {
-        mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
+        let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
     }
 
     pub fn request(&self) -> Option<Arc<T>> {
@@ -63,19 +63,25 @@ impl<T> RCell<T> {
     }
 }
 
+impl<T> Default for RCell<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 trait Replace<T> {
     fn replace(&self, new: T);
 }
 
 impl<T> Replace<Arc<T>> for RCell<T> {
     fn replace(&self, arc: Arc<T>) {
-        mem::replace(&mut *self.0.lock(), ArcState::Arc(arc));
+        let _ = mem::replace(&mut *self.0.lock(), ArcState::Arc(arc));
     }
 }
 
 impl<T> Replace<Weak<T>> for RCell<T> {
     fn replace(&self, weak: Weak<T>) {
-        mem::replace(&mut *self.0.lock(), ArcState::Weak(weak));
+        let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(weak));
     }
 }
 
