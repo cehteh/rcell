@@ -71,10 +71,9 @@ impl<T> RCell<T> {
     /// Tries to get an `Arc<T>` from the RCell. This may fail if the RCell was Weak and all
     /// other `Arc's` became dropped.
     pub fn request(&self) -> Option<Arc<T>> {
-        if let ArcState::Arc(arc) = &*self.0.lock() {
-            Some(arc.clone())
-        } else {
-            None
+        match &*self.0.lock() {
+            ArcState::Arc(arc) => Some(arc.clone()),
+            ArcState::Weak(weak) => weak.upgrade(),
         }
     }
 }
@@ -137,9 +136,44 @@ impl<T> Clone for ArcState<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::RCell;
+    use std::sync::Arc;
+
     #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn smoke() {
+        let rcell = RCell::<bool>::new();
+        assert!(!rcell.retained());
+    }
+
+    #[test]
+    fn new_from() {
+        let rcell = RCell::new_from("foobar");
+        assert!(rcell.retained());
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.release();
+        assert_eq!(rcell.request(), None);
+    }
+
+    #[test]
+    fn from_arc() {
+        let arc = Arc::new("foobar");
+        let rcell = RCell::from(arc);
+        assert!(rcell.retained());
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.release();
+        assert_eq!(rcell.request(), None);
+    }
+
+    #[test]
+    fn from_weak() {
+        let arc = Arc::new("foobar");
+        let weak = Arc::downgrade(&arc);
+        let rcell = RCell::from(weak);
+        assert!(!rcell.retained());
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.release();
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.remove();
+        assert_eq!(rcell.request(), None);
     }
 }
