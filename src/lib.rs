@@ -1,32 +1,65 @@
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
+#![warn(rustdoc::missing_crate_level_docs)]
+
 use parking_lot::Mutex;
+use std::mem;
 use std::sync::{Arc, Weak};
 
-struct RCell<T>(Mutex<StrongOrWeak<T>>);
+struct RCell<T>(Mutex<ArcState<T>>);
 
-enum StrongOrWeak<T> {
-    Strong(Arc<T>),
+enum ArcState<T> {
+    Arc(Arc<T>),
     Weak(Weak<T>),
 }
 
 impl<T> RCell<T> {
     pub fn new() -> RCell<T> {
-        RCell(Mutex::new(StrongOrWeak::Weak(Weak::new())))
+        RCell(Mutex::new(ArcState::Weak(Weak::new())))
+    }
+
+    pub fn retained(&self) -> bool {
+        matches!(*self.0.lock(), ArcState::Arc(_))
     }
 
     pub fn retain(&self) -> Option<Arc<T>> {
-        todo!()
+        let mut lock = self.0.lock();
+        match &*lock {
+            ArcState::Arc(arc) => Some(arc.clone()),
+            ArcState::Weak(weak) => {
+                if let Some(arc) = weak.upgrade() {
+                    mem::replace(&mut *lock, ArcState::Arc(arc.clone()));
+                    Some(arc)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub fn release(&self) {
-        todo!()
+        let mut lock = self.0.lock();
+        let new = if let ArcState::Arc(arc) = &*lock {
+            Some(ArcState::Weak(Arc::downgrade(&arc)))
+        } else {
+            None
+        };
+
+        if let Some(new) = new {
+            mem::replace(&mut *lock, new);
+        }
     }
 
     pub fn remove(&self) {
-        todo!()
+        mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
     }
 
-    pub fn request() -> Option<Arc<T>> {
-        todo!()
+    pub fn request(&self) -> Option<Arc<T>> {
+        if let ArcState::Arc(arc) = &*self.0.lock() {
+            Some(arc.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -35,32 +68,32 @@ trait Replace<T> {
 }
 
 impl<T> Replace<Arc<T>> for RCell<T> {
-    fn replace(&self, new: Arc<T>) {
-        todo!()
+    fn replace(&self, arc: Arc<T>) {
+        mem::replace(&mut *self.0.lock(), ArcState::Arc(arc));
     }
 }
 
 impl<T> Replace<Weak<T>> for RCell<T> {
-    fn replace(&self, new: Weak<T>) {
-        todo!()
-    }
-}
-
-impl<T> From<T> for RCell<T> {
-    fn from(value: T) -> Self {
-        RCell(Mutex::new(StrongOrWeak::Strong(Arc::new(value))))
+    fn replace(&self, weak: Weak<T>) {
+        mem::replace(&mut *self.0.lock(), ArcState::Weak(weak));
     }
 }
 
 impl<T> From<Arc<T>> for RCell<T> {
     fn from(arc: Arc<T>) -> Self {
-        RCell(Mutex::new(StrongOrWeak::Strong(arc)))
+        RCell(Mutex::new(ArcState::Arc(arc)))
     }
 }
 
 impl<T> From<Weak<T>> for RCell<T> {
     fn from(weak: Weak<T>) -> Self {
-        RCell(Mutex::new(StrongOrWeak::Weak(weak)))
+        RCell(Mutex::new(ArcState::Weak(weak)))
+    }
+}
+
+impl<T> From<T> for RCell<T> {
+    fn from(value: T) -> Self {
+        RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
     }
 }
 
