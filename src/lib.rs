@@ -17,13 +17,8 @@ enum ArcState<T> {
 }
 
 impl<T> RCell<T> {
-    /// Create a nee RCell holding a empty reference always returning None on upgrading.
-    pub fn new() -> RCell<T> {
-        RCell(Mutex::new(ArcState::Weak(Weak::new())))
-    }
-
     /// Creates a new strong RCell from the supplied value.
-    pub fn new_from(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
     }
 
@@ -32,8 +27,19 @@ impl<T> RCell<T> {
         matches!(*self.0.lock(), ArcState::Arc(_))
     }
 
+    /// Returns the number of strong references holding an object alive. The returned strong
+    /// count is informal only, the result may be appoximate and has race conditions when
+    /// other threads modify the refcount at the same time.
+    pub fn refcount(&self) -> usize {
+        match &*self.0.lock() {
+            ArcState::Arc(arc) => Arc::strong_count(arc),
+            ArcState::Weak(weak) => weak.strong_count(),
+        }
+    }
+
     /// Tries to upgrade this RCell from Weak<T> to Arc<T>. This means that as long the RCell
-    /// is not dropped the associated data won't be either.
+    /// is not dropped the associated data won't be either. When successful it returns
+    /// Some<Arc<T>> containing the value, otherwise None is returned on failure.
     pub fn retain(&self) -> Option<Arc<T>> {
         let mut lock = self.0.lock();
         match &*lock {
@@ -63,7 +69,9 @@ impl<T> RCell<T> {
         }
     }
 
-    /// Removes the reference to the value, initializes it as with `RCell::new()`.
+    /// Removes the reference to the value, replaces it with a Weak::new().  The rationale for
+    /// this function is to release *any* resource associated with a RCell (potentially member
+    /// of a struct that lives longer) in case one knows that it will never be upgraded again.
     pub fn remove(&self) {
         let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
     }
@@ -112,12 +120,6 @@ impl<T> From<Weak<T>> for RCell<T> {
     }
 }
 
-impl<T> Default for RCell<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T> Clone for RCell<T> {
     fn clone(&self) -> Self {
         RCell(Mutex::new(self.0.lock().clone()))
@@ -141,13 +143,13 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let rcell = RCell::<bool>::new();
-        assert!(!rcell.retained());
+        let rcell = RCell::new("foobar");
+        assert!(rcell.retained());
     }
 
     #[test]
-    fn new_from() {
-        let rcell = RCell::new_from("foobar");
+    fn new() {
+        let rcell = RCell::new("foobar");
         assert!(rcell.retained());
         assert_eq!(*rcell.request().unwrap(), "foobar");
         rcell.release();
@@ -165,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn from_weak() {
+    fn from_weak_release() {
         let arc = Arc::new("foobar");
         let weak = Arc::downgrade(&arc);
         let rcell = RCell::from(weak);
@@ -173,6 +175,19 @@ mod tests {
         assert_eq!(*rcell.request().unwrap(), "foobar");
         rcell.release();
         assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.remove();
+        assert_eq!(rcell.request(), None);
+    }
+
+    #[test]
+    fn from_weak_drop_original() {
+        let arc = Arc::new("foobar");
+        let weak = Arc::downgrade(&arc);
+        let rcell = RCell::from(weak);
+        assert!(!rcell.retained());
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        drop(arc);
+        assert_eq!(rcell.request(), None);
         rcell.remove();
         assert_eq!(rcell.request(), None);
     }
