@@ -74,12 +74,6 @@ impl<T> RCell<T> {
     }
 }
 
-impl<T> Default for RCell<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Helper Trait for replacing the content of a RCell with something new.
 pub trait Replace<T> {
     /// Replaces the contained value in self with T.
@@ -118,6 +112,28 @@ impl<T> From<T> for RCell<T> {
     /// Creates a new strong RCell with the supplied `T`.
     fn from(value: T) -> Self {
         RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
+    }
+}
+
+impl<T> Default for RCell<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for RCell<T> {
+    fn clone(&self) -> Self {
+        RCell(Mutex::new(self.0.lock().clone()))
+    }
+}
+
+impl<T> Clone for ArcState<T> {
+    fn clone(&self) -> Self {
+        use ArcState::*;
+        match self {
+            Arc(arc) => Arc(arc.clone()),
+            Weak(weak) => Weak(weak.clone()),
+        }
     }
 }
 
