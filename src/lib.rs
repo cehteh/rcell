@@ -22,6 +22,11 @@ impl<T> RCell<T> {
         RCell(Mutex::new(ArcState::Weak(Weak::new())))
     }
 
+    /// Creates a new strong RCell from the supplied value.
+    pub fn new_from(value: T) -> Self {
+        RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
+    }
+
     /// Returns 'true' when this RCell contains a strong `Arc<T>`.
     pub fn retained(&self) -> bool {
         matches!(*self.0.lock(), ArcState::Arc(_))
@@ -105,13 +110,6 @@ impl<T> From<Weak<T>> for RCell<T> {
     /// Creates a new weak RCell with the supplied `Weak<T>`.
     fn from(weak: Weak<T>) -> Self {
         RCell(Mutex::new(ArcState::Weak(weak)))
-    }
-}
-
-impl<T> From<T> for RCell<T> {
-    /// Creates a new strong RCell with the supplied `T`.
-    fn from(value: T) -> Self {
-        RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
     }
 }
 
