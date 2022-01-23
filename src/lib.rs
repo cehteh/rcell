@@ -80,7 +80,9 @@ impl<T> Default for RCell<T> {
     }
 }
 
-trait Replace<T> {
+/// Helper Trait for replacing the content of a RCell with something new.
+pub trait Replace<T> {
+    /// Replaces the contained value in self with T.
     fn replace(&self, new: T);
 }
 
