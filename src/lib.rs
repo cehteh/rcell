@@ -6,8 +6,10 @@ use parking_lot::Mutex;
 use std::mem;
 use std::sync::{Arc, Weak};
 
-struct RCell<T>(Mutex<ArcState<T>>);
+#[derive(Debug)]
+pub struct RCell<T>(Mutex<ArcState<T>>);
 
+#[derive(Debug)]
 enum ArcState<T> {
     Arc(Arc<T>),
     Weak(Weak<T>),
