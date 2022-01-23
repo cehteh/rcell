@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use std::mem;
 use std::sync::{Arc, Weak};
 
+/// A RCell holding either an `Arc<T>` or a `Weak<T>`.
 #[derive(Debug)]
 pub struct RCell<T>(Mutex<ArcState<T>>);
 
@@ -16,14 +17,18 @@ enum ArcState<T> {
 }
 
 impl<T> RCell<T> {
+    /// Create a nee RCell holding a empty reference always returning None on upgrading.
     pub fn new() -> RCell<T> {
         RCell(Mutex::new(ArcState::Weak(Weak::new())))
     }
 
+    /// Returns 'true' when this RCell contains a strong `Arc<T>`.
     pub fn retained(&self) -> bool {
         matches!(*self.0.lock(), ArcState::Arc(_))
     }
 
+    /// Tries to upgrade this RCell from Weak<T> to Arc<T>. This means that as long the RCell
+    /// is not dropped the associated data won't be either.
     pub fn retain(&self) -> Option<Arc<T>> {
         let mut lock = self.0.lock();
         match &*lock {
@@ -39,6 +44,7 @@ impl<T> RCell<T> {
         }
     }
 
+    /// Downgrades the RCell, any associated value may become dropped when no other references exist.
     pub fn release(&self) {
         let mut lock = self.0.lock();
         let new = if let ArcState::Arc(arc) = &*lock {
@@ -52,10 +58,13 @@ impl<T> RCell<T> {
         }
     }
 
+    /// Removes the reference to the value, initializes it as with `RCell::new()`.
     pub fn remove(&self) {
         let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
     }
 
+    /// Tries to get an `Arc<T>` from the RCell. This may fail if the RCell was Weak and all
+    /// other `Arc's` became dropped.
     pub fn request(&self) -> Option<Arc<T>> {
         if let ArcState::Arc(arc) = &*self.0.lock() {
             Some(arc.clone())
@@ -76,30 +85,35 @@ trait Replace<T> {
 }
 
 impl<T> Replace<Arc<T>> for RCell<T> {
+    /// Replaces the RCell with the supplied `Arc<T>`. The old entry becomes dropped.
     fn replace(&self, arc: Arc<T>) {
         let _ = mem::replace(&mut *self.0.lock(), ArcState::Arc(arc));
     }
 }
 
 impl<T> Replace<Weak<T>> for RCell<T> {
+    /// Replaces the RCell with the supplied `Weak<T>`. The old entry becomes dropped.
     fn replace(&self, weak: Weak<T>) {
         let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(weak));
     }
 }
 
 impl<T> From<Arc<T>> for RCell<T> {
+    /// Creates a new strong RCell with the supplied `Arc<T>`.
     fn from(arc: Arc<T>) -> Self {
         RCell(Mutex::new(ArcState::Arc(arc)))
     }
 }
 
 impl<T> From<Weak<T>> for RCell<T> {
+    /// Creates a new weak RCell with the supplied `Weak<T>`.
     fn from(weak: Weak<T>) -> Self {
         RCell(Mutex::new(ArcState::Weak(weak)))
     }
 }
 
 impl<T> From<T> for RCell<T> {
+    /// Creates a new strong RCell with the supplied `T`.
     fn from(value: T) -> Self {
         RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
     }
