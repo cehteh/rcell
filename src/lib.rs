@@ -120,6 +120,13 @@ impl<T> From<Weak<T>> for RCell<T> {
     }
 }
 
+impl<T> Default for RCell<T> {
+    /// Creates an RCell that doesnt hold any reference.
+    fn default() -> Self {
+        RCell::from(Weak::new())
+    }
+}
+
 impl<T> Clone for RCell<T> {
     fn clone(&self) -> Self {
         RCell(Mutex::new(self.0.lock().clone()))
