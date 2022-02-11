@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use std::mem;
 use std::sync::{Arc, Weak};
 
-/// A RCell holding either an `Arc<T>` or a `Weak<T>`.
+/// A RCell holding either an `Arc<T>`, a `Weak<T>` or being `Empty`.
 #[derive(Debug)]
 pub struct RCell<T>(Mutex<ArcState<T>>);
 
@@ -14,10 +14,11 @@ pub struct RCell<T>(Mutex<ArcState<T>>);
 enum ArcState<T> {
     Arc(Arc<T>),
     Weak(Weak<T>),
+    Empty,
 }
 
 impl<T> RCell<T> {
-    /// Creates a new strong RCell from the supplied value.
+    /// Creates a new strong (Arc<T>) RCell from the supplied value.
     pub fn new(value: T) -> Self {
         RCell(Mutex::new(ArcState::Arc(Arc::new(value))))
     }
@@ -29,12 +30,9 @@ impl<T> RCell<T> {
 
     /// Returns the number of strong references holding an object alive. The returned strong
     /// count is informal only, the result may be appoximate and has race conditions when
-    /// other threads modify the refcount at the same time.
+    /// other threads modify the refcount concurrently.
     pub fn refcount(&self) -> usize {
-        match &*self.0.lock() {
-            ArcState::Arc(arc) => Arc::strong_count(arc),
-            ArcState::Weak(weak) => weak.strong_count(),
-        }
+        self.0.lock().refcount()
     }
 
     /// Tries to upgrade this RCell from Weak<T> to Arc<T>. This means that as long the RCell
@@ -52,28 +50,32 @@ impl<T> RCell<T> {
                     None
                 }
             }
+            ArcState::Empty => None,
         }
     }
 
-    /// Downgrades the RCell, any associated value may become dropped when no other references exist.
+    /// Downgrades the RCell, any associated value may become dropped when no other references
+    /// exist. When no strong reference left remaining this cell becomes Empty.
     pub fn release(&self) {
         let mut lock = self.0.lock();
-        let new = if let ArcState::Arc(arc) = &*lock {
-            Some(ArcState::Weak(Arc::downgrade(arc)))
-        } else {
-            None
-        };
-
-        if let Some(new) = new {
-            let _ = mem::replace(&mut *lock, new);
+        if let Some(weak) = match &*lock {
+            ArcState::Arc(arc) => Some(Arc::downgrade(&arc)),
+            ArcState::Weak(weak) => Some(weak.clone()),
+            ArcState::Empty => None,
+        } {
+            if weak.strong_count() > 0 {
+                let _ = mem::replace(&mut *lock, ArcState::Weak(weak));
+            } else {
+                let _ = mem::replace(&mut *lock, ArcState::Empty);
+            }
         }
     }
 
-    /// Removes the reference to the value, replaces it with a Weak::new().  The rationale for
-    /// this function is to release *any* resource associated with a RCell (potentially member
-    /// of a struct that lives longer) in case one knows that it will never be upgraded again.
+    /// Removes the reference to the value. The rationale for this function is to release
+    /// *any* resource associated with a RCell (potentially member of a struct that lives
+    /// longer) in case one knows that it will never be upgraded again.
     pub fn remove(&self) {
-        let _ = mem::replace(&mut *self.0.lock(), ArcState::Weak(Weak::new()));
+        let _ = mem::replace(&mut *self.0.lock(), ArcState::Empty);
     }
 
     /// Tries to get an `Arc<T>` from the RCell. This may fail if the RCell was Weak and all
@@ -82,6 +84,7 @@ impl<T> RCell<T> {
         match &*self.0.lock() {
             ArcState::Arc(arc) => Some(arc.clone()),
             ArcState::Weak(weak) => weak.upgrade(),
+            ArcState::Empty => None,
         }
     }
 }
@@ -123,7 +126,7 @@ impl<T> From<Weak<T>> for RCell<T> {
 impl<T> Default for RCell<T> {
     /// Creates an RCell that doesnt hold any reference.
     fn default() -> Self {
-        RCell::from(Weak::new())
+        RCell(Mutex::new(ArcState::Empty))
     }
 }
 
@@ -133,12 +136,23 @@ impl<T> Clone for RCell<T> {
     }
 }
 
+impl<T> ArcState<T> {
+    fn refcount(&self) -> usize {
+        match self {
+            ArcState::Arc(arc) => Arc::strong_count(arc),
+            ArcState::Weak(weak) => weak.strong_count(),
+            ArcState::Empty => 0,
+        }
+    }
+}
+
 impl<T> Clone for ArcState<T> {
     fn clone(&self) -> Self {
         use ArcState::*;
         match self {
             Arc(arc) => Arc(arc.clone()),
             Weak(weak) => Weak(weak.clone()),
+            Empty => Empty,
         }
     }
 }
@@ -160,6 +174,13 @@ mod tests {
         assert!(rcell.retained());
         assert_eq!(*rcell.request().unwrap(), "foobar");
         rcell.release();
+        assert_eq!(rcell.request(), None);
+    }
+
+    #[test]
+    fn default() {
+        let rcell = RCell::<i32>::default();
+        assert!(!rcell.retained());
         assert_eq!(rcell.request(), None);
     }
 
