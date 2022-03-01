@@ -200,7 +200,7 @@ impl<T> Clone for ArcState<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::RCell;
+    use crate::{RCell, Replace};
     use std::sync::Arc;
 
     #[test]
@@ -260,4 +260,26 @@ mod tests {
         rcell.remove();
         assert_eq!(rcell.request(), None);
     }
+
+    #[test]
+    fn replace_arc() {
+        let rcell = RCell::default();
+        assert!(!rcell.retained());
+        rcell.replace(Arc::new("foobar"));
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.remove();
+        assert_eq!(rcell.request(), None);
+    }
+
+    #[test]
+    fn replace_weak() {
+        let arc = Arc::new("foobar");
+        let rcell = RCell::default();
+        assert!(!rcell.retained());
+        rcell.replace(Arc::downgrade(&arc));
+        assert_eq!(*rcell.request().unwrap(), "foobar");
+        rcell.remove();
+        assert_eq!(rcell.request(), None);
+    }
+
 }
