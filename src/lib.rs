@@ -99,9 +99,11 @@ impl<T> RCell<T> {
 
     // idea borrowed from crossbeam SeqLock
     fn sharded_mutex(&self) -> &'static RawMutex {
-        const LEN: usize = 97;
-        static LOCKS: [RawMutex; LEN] = [RawMutex::INIT; LEN];
-        &LOCKS[self as *const Self as usize % LEN]
+        const LEN: usize = 127;
+        #[repr(align(128))] // cache line aligned
+        struct Locks([RawMutex; LEN]);
+        static LOCKS: Locks = Locks([RawMutex::INIT; LEN]);
+        &LOCKS.0[self as *const Self as usize % LEN]
     }
 
     // Acquire a global sharded lock with unlock on drop semantics
