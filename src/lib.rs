@@ -2,15 +2,13 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]
 
-use parking_lot::lock_api::RawMutex as RawMutexTrait;
-use parking_lot::RawMutex;
-use std::cell::UnsafeCell;
+use sharded_mutex::{ShardedMutex, ShardedMutexGuard};
 use std::mem;
 use std::sync::{Arc, Weak};
 
 /// A RCell holding either an `Arc<T>`, a `Weak<T>` or being `Empty`.
 #[derive(Debug)]
-pub struct RCell<T>(UnsafeCell<ArcState<T>>);
+pub struct RCell<T>(ShardedMutex<ArcState<T>>);
 
 #[derive(Debug)]
 enum ArcState<T> {
@@ -22,34 +20,31 @@ enum ArcState<T> {
 impl<T> RCell<T> {
     /// Creates a new strong (Arc<T>) RCell from the supplied value.
     pub fn new(value: T) -> Self {
-        RCell(UnsafeCell::new(ArcState::Arc(Arc::new(value))))
+        RCell(ShardedMutex::new(ArcState::Arc(Arc::new(value))))
     }
 
     /// Returns 'true' when this RCell contains a strong `Arc<T>`.
     pub fn retained(&self) -> bool {
-        let lock = self.sharded_lock();
-        matches!(self.get_mut(&lock), ArcState::Arc(_))
+        matches!(*self.lock(), ArcState::Arc(_))
     }
 
     /// Returns the number of strong references holding an object alive. The returned strong
     /// count is informal only, the result may be appoximate and has race conditions when
     /// other threads modify the refcount concurrently.
     pub fn refcount(&self) -> usize {
-        let lock = self.sharded_lock();
-        self.get_mut(&lock).refcount()
+        self.lock().refcount()
     }
 
     /// Tries to upgrade this RCell from Weak<T> to Arc<T>. This means that as long the RCell
     /// is not dropped the associated data won't be either. When successful it returns
     /// Some<Arc<T>> containing the value, otherwise None is returned on failure.
     pub fn retain(&self) -> Option<Arc<T>> {
-        let lock = self.sharded_lock();
-        let cell = self.get_mut(&lock);
-        match cell {
+        let mut cell = self.lock();
+        match cell.as_ref() {
             ArcState::Arc(arc) => Some(arc.clone()),
             ArcState::Weak(weak) => {
                 if let Some(arc) = weak.upgrade() {
-                    let _ = mem::replace(cell, ArcState::Arc(arc.clone()));
+                    let _ = mem::replace(cell.as_mut(), ArcState::Arc(arc.clone()));
                     Some(arc)
                 } else {
                     None
@@ -62,18 +57,17 @@ impl<T> RCell<T> {
     /// Downgrades the RCell, any associated value may become dropped when no other references
     /// exist. When no strong reference left remaining this cell becomes Empty.
     pub fn release(&self) {
-        let lock = self.sharded_lock();
-        let cell = self.get_mut(&lock);
+        let mut cell = self.lock();
 
-        if let Some(weak) = match cell {
+        if let Some(weak) = match cell.as_ref() {
             ArcState::Arc(arc) => Some(Arc::downgrade(arc)),
             ArcState::Weak(weak) => Some(weak.clone()),
             ArcState::Empty => None,
         } {
             if weak.strong_count() > 0 {
-                let _ = mem::replace(cell, ArcState::Weak(weak));
+                let _ = mem::replace(cell.as_mut(), ArcState::Weak(weak));
             } else {
-                let _ = mem::replace(cell, ArcState::Empty);
+                let _ = mem::replace(cell.as_mut(), ArcState::Empty);
             }
         }
     }
@@ -82,50 +76,22 @@ impl<T> RCell<T> {
     /// *any* resource associated with a RCell (potentially member of a struct that lives
     /// longer) in case one knows that it will never be upgraded again.
     pub fn remove(&self) {
-        let lock = self.sharded_lock();
-        let _ = mem::replace(self.get_mut(&lock), ArcState::Empty);
+        let _ = mem::replace(self.lock().as_mut(), ArcState::Empty);
     }
 
     /// Tries to get an `Arc<T>` from the RCell. This may fail if the RCell was Weak and all
     /// other `Arc's` became dropped.
     pub fn request(&self) -> Option<Arc<T>> {
-        let lock = self.sharded_lock();
-        match self.get_mut(&lock) {
+        match self.lock().as_ref() {
             ArcState::Arc(arc) => Some(arc.clone()),
             ArcState::Weak(weak) => weak.upgrade(),
             ArcState::Empty => None,
         }
     }
 
-    // idea borrowed from crossbeam SeqLock
-    fn sharded_mutex(&self) -> &'static RawMutex {
-        const LEN: usize = 127;
-        #[repr(align(128))] // cache line aligned
-        struct Locks([RawMutex; LEN]);
-        static LOCKS: Locks = Locks([RawMutex::INIT; LEN]);
-        &LOCKS.0[self as *const Self as usize % LEN]
-    }
-
     // Acquire a global sharded lock with unlock on drop semantics
-    fn sharded_lock(&self) -> RawMutexGuard<T> {
-        self.sharded_mutex().lock();
-        RawMutexGuard(self)
-    }
-
-    // SAFETY: _is_locked_ is intentionally unused, its only there to denote that the lock must been held.
-    #[allow(clippy::mut_from_ref)]
-    fn get_mut(&self, _is_locked_: &RawMutexGuard<T>) -> &mut ArcState<T> {
-        unsafe { &mut *self.0.get() }
-    }
-}
-
-struct RawMutexGuard<'a, T>(&'a RCell<T>);
-impl<T> Drop for RawMutexGuard<'_, T> {
-    fn drop(&mut self) {
-        unsafe {
-            // SAFETY: the guard gurantees that the we have the lock
-            self.0.sharded_mutex().unlock();
-        }
+    fn lock(&self) -> ShardedMutexGuard<ArcState<T>> {
+        self.0.lock()
     }
 }
 
@@ -138,44 +104,41 @@ pub trait Replace<T> {
 impl<T> Replace<Arc<T>> for RCell<T> {
     /// Replaces the RCell with the supplied `Arc<T>`. The old entry becomes dropped.
     fn replace(&self, arc: Arc<T>) {
-        let lock = self.sharded_lock();
-        let _ = mem::replace(self.get_mut(&lock), ArcState::Arc(arc));
+        let _ = mem::replace(self.lock().as_mut(), ArcState::Arc(arc));
     }
 }
 
 impl<T> Replace<Weak<T>> for RCell<T> {
     /// Replaces the RCell with the supplied `Weak<T>`. The old entry becomes dropped.
     fn replace(&self, weak: Weak<T>) {
-        let lock = self.sharded_lock();
-        let _ = mem::replace(self.get_mut(&lock), ArcState::Weak(weak));
+        let _ = mem::replace(self.lock().as_mut(), ArcState::Weak(weak));
     }
 }
 
 impl<T> From<Arc<T>> for RCell<T> {
     /// Creates a new strong RCell with the supplied `Arc<T>`.
     fn from(arc: Arc<T>) -> Self {
-        RCell(UnsafeCell::new(ArcState::Arc(arc)))
+        RCell(ShardedMutex::new(ArcState::Arc(arc)))
     }
 }
 
 impl<T> From<Weak<T>> for RCell<T> {
     /// Creates a new weak RCell with the supplied `Weak<T>`.
     fn from(weak: Weak<T>) -> Self {
-        RCell(UnsafeCell::new(ArcState::Weak(weak)))
+        RCell(ShardedMutex::new(ArcState::Weak(weak)))
     }
 }
 
 impl<T> Default for RCell<T> {
     /// Creates an RCell that doesn't hold any reference.
     fn default() -> Self {
-        RCell(UnsafeCell::new(ArcState::Empty))
+        RCell(ShardedMutex::new(ArcState::Empty))
     }
 }
 
 impl<T> Clone for RCell<T> {
     fn clone(&self) -> Self {
-        let lock = self.sharded_lock();
-        RCell(UnsafeCell::new(self.get_mut(&lock).clone()))
+        RCell(ShardedMutex::new(self.lock().clone()))
     }
 }
 
