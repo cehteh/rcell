@@ -2,22 +2,68 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]
 
-use sharded_mutex::{ShardedMutex, ShardedMutexGuard};
+use sharded_mutex::*;
 use std::mem;
 use std::sync::{Arc, Weak};
 
 /// A RCell holding either an `Arc<T>`, a `Weak<T>` or being `Empty`.
 #[derive(Debug)]
-pub struct RCell<T>(ShardedMutex<ArcState<T>>);
+pub struct RCell<T, TAG = T>(ShardedMutex<ArcState<T>, TAG>)
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>;
 
+/// RCell uses mutex pools for each type it wraps. Due to rust limitations these pools can't
+/// be efficently instantiated by generics. Thus one has to implement the necessary
+/// boilerplate code for all custom types with this helper macro.
+///
+/// Example:
+/// ```
+/// use rcell::*;
+///
+/// // Our Type
+/// #[derive(Debug, PartialEq)]
+/// struct MyType<T>(T);
+///
+/// // implement rcell, needs to be non generic
+/// rcell!(MyType<u8>);
+///
+/// let my_rcell = RCell::new(MyType(100u8));
+/// assert_eq!(*my_rcell.request().unwrap(), MyType(100));
+/// ```
+///
+/// When implementing rcell for foreign types a 'TAG' type discriminator must be passed:
+/// ```
+/// use rcell::*;
+///
+/// struct MyTag;
+/// rcell!(&'static str, MyTag);
+///
+/// let my_rcell = RCell::new("Hello World!");
+/// assert_eq!(*my_rcell.request().unwrap(), "Hello World!");
+/// ```
+#[macro_export]
+macro_rules! rcell {
+    ($T:ty, $TAG:ty) => {
+        sharded_mutex::sharded_mutex!($crate::ArcState<$T>, $TAG);
+    };
+    ($T:ty) => {
+        sharded_mutex::sharded_mutex!($crate::ArcState<$T>, $T);
+    };
+}
+
+/// Only exported for macro use
+#[doc(hidden)]
 #[derive(Debug)]
-enum ArcState<T> {
+pub enum ArcState<T> {
     Arc(Arc<T>),
     Weak(Weak<T>),
     Empty,
 }
 
-impl<T> RCell<T> {
+impl<T, TAG> RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Creates a new strong (Arc<T>) RCell from the supplied value.
     pub fn new(value: T) -> Self {
         RCell(ShardedMutex::new(ArcState::Arc(Arc::new(value))))
@@ -90,7 +136,7 @@ impl<T> RCell<T> {
     }
 
     // Acquire a global sharded lock with unlock on drop semantics
-    fn lock(&self) -> ShardedMutexGuard<ArcState<T>> {
+    fn lock(&self) -> ShardedMutexGuard<ArcState<T>, TAG> {
         self.0.lock()
     }
 }
@@ -101,42 +147,60 @@ pub trait Replace<T> {
     fn replace(&self, new: T);
 }
 
-impl<T> Replace<Arc<T>> for RCell<T> {
+impl<T, TAG> Replace<Arc<T>> for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Replaces the RCell with the supplied `Arc<T>`. The old entry becomes dropped.
     fn replace(&self, arc: Arc<T>) {
         let _ = mem::replace(self.lock().as_mut(), ArcState::Arc(arc));
     }
 }
 
-impl<T> Replace<Weak<T>> for RCell<T> {
+impl<T, TAG> Replace<Weak<T>> for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Replaces the RCell with the supplied `Weak<T>`. The old entry becomes dropped.
     fn replace(&self, weak: Weak<T>) {
         let _ = mem::replace(self.lock().as_mut(), ArcState::Weak(weak));
     }
 }
 
-impl<T> From<Arc<T>> for RCell<T> {
+impl<T, TAG> From<Arc<T>> for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Creates a new strong RCell with the supplied `Arc<T>`.
     fn from(arc: Arc<T>) -> Self {
         RCell(ShardedMutex::new(ArcState::Arc(arc)))
     }
 }
 
-impl<T> From<Weak<T>> for RCell<T> {
+impl<T, TAG> From<Weak<T>> for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Creates a new weak RCell with the supplied `Weak<T>`.
     fn from(weak: Weak<T>) -> Self {
         RCell(ShardedMutex::new(ArcState::Weak(weak)))
     }
 }
 
-impl<T> Default for RCell<T> {
+impl<T, TAG> Default for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     /// Creates an RCell that doesn't hold any reference.
     fn default() -> Self {
         RCell(ShardedMutex::new(ArcState::Empty))
     }
 }
 
-impl<T> Clone for RCell<T> {
+impl<T, TAG> Clone for RCell<T, TAG>
+where
+    ArcState<T>: AssocStatic<MutexPool, TAG>,
+{
     fn clone(&self) -> Self {
         RCell(ShardedMutex::new(self.lock().clone()))
     }
@@ -165,8 +229,10 @@ impl<T> Clone for ArcState<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{RCell, Replace};
+    use crate::{rcell, RCell, Replace};
     use std::sync::Arc;
+
+    rcell!(&str);
 
     #[test]
     fn smoke() {
@@ -182,6 +248,8 @@ mod tests {
         rcell.release();
         assert_eq!(rcell.request(), None);
     }
+
+    rcell!(i32);
 
     #[test]
     fn default() {
@@ -246,5 +314,4 @@ mod tests {
         rcell.remove();
         assert_eq!(rcell.request(), None);
     }
-
 }
