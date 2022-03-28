@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]
 
-use sharded_mutex::*;
+pub use sharded_mutex::*;
 use std::mem;
 use std::sync::{Arc, Weak};
 
@@ -44,10 +44,10 @@ where
 #[macro_export]
 macro_rules! rcell {
     ($T:ty, $TAG:ty) => {
-        sharded_mutex::sharded_mutex!($crate::ArcState<$T>, $TAG);
+        $crate::sharded_mutex!($crate::ArcState<$T>, $TAG);
     };
     ($T:ty) => {
-        sharded_mutex::sharded_mutex!($crate::ArcState<$T>, $T);
+        $crate::sharded_mutex!($crate::ArcState<$T>, $T);
     };
 }
 
