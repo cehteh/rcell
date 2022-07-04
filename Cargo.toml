@@ -12,4 +12,4 @@ keywords = ["arc", "cell"]
 categories = ["concurrency", "memory-management"]
 
 [dependencies]
-sharded_mutex = "0.8.0"
+sharded_mutex = "1.0.0"
