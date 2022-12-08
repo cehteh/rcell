@@ -146,23 +146,6 @@ impl<T> Default for RCell<T> {
     }
 }
 
-// impl<T> Clone for RCell<T>
-// {
-//     fn clone(&self) -> Self {
-//         RCell(self.clone())
-//     }
-// }
-
-// impl<T> Clone for RCell<T> {
-//     fn clone(&self) -> Self {
-//         match self {
-//             Strong(arc) => Strong(arc.clone()),
-//             Weak(weak) => Weak(weak.clone()),
-//             Empty => Empty,
-//         }
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use crate::{RCell, Strong, Replace};
