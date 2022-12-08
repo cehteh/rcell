@@ -15,9 +15,11 @@
 
 use std::mem;
 #[cfg(feature = "sync")]
+#[doc(hidden)]
 pub use std::sync::{Arc as Strong, Weak};
 
 #[cfg(not(feature = "sync"))]
+#[doc(hidden)]
 pub use std::rc::{Rc as Strong, Weak};
 
 /// A RCell holding either an `Strong<T>`, a `Weak<T>` or being `Empty`.
