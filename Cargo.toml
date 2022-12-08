@@ -11,5 +11,8 @@ edition = "2021"
 keywords = ["arc", "cell"]
 categories = ["concurrency", "memory-management"]
 
-[dependencies]
-sharded_mutex = "0.8.0"
+[features]
+default = ["sync"]
+
+# enabled by default, use 'sync' Arc/Weak; when disabled then non sync Rc/Weak are used
+sync = []
